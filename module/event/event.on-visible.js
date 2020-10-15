@@ -14,6 +14,8 @@
 
 "use strict";
 
+// To recode with new evet.js feature (WeakMap + save of option addEventListener)
+
 (function() {
 	const defaultParam = {
 		root 		: null,		// Conteneur par défaut possèdant les éléments susceptibles d'être invisible et de devenir visible, null = toute la page

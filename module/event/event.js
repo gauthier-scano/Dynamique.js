@@ -324,16 +324,16 @@
 		
 			/***** Création des tableaux de sauvegarde *****/
 			
-			const	eventNameElem = window.elem = [/* DomElement */],
-					eventNameDis = window.dis = {/* Equivalent à eventFct */},
-					eventNameFct = window.fct = {/* "1" : {
+			const	eventNameDis = window.dis = new WeakMap(), /* As eventNameFct */
+					eventNameFct = window.fct = new WeakMap();
+					/* elem => {
 						"eventName" : [{
-							"click" : [fct, fct, ...],
-							"mouseover" : [fct, fct, ...]
+							"click" : [[fct, ...], opt], [fct, ...], opt], ...],
+							"mouseover" : [[fct, ...], opt], [fct, ...], opt], ...]
 						}, {
-							"click" : [fct]
+							"click" : [[fct, ...], opt]]
 						}
-					}*/};
+					}*/;
 				
 			/***** FIN Création des tableaux de sauvegarde *****/
 		
@@ -353,9 +353,10 @@
 			// 		domList: {String}, tableau d'élément sur lesquels il faut ajouter les événements
 			//		assocName: {String}, Nom à associer aux fonctions pour le ou les événements définis dans ...arg
 			// 		...arg: Voir fonction extractArg
-			// Version: 1.2
+			// Version: 1.3
 			// Version 1.0 => 1.1: Prise en charge de la fonctionnalité de sauvegarde d'événement (saveEvent), désormais, un nom de fonction sauvegardée peut-être fournie à la place d'une fonction
 			// Version 1.1 => 1.2: Refonte de la fonction lors de la création d'Event.js, celle-ci suit le comportement de etractArg désormais et possède une architecture différente
+			// Version 1.2 => 1.3: Prise en charge de WeakMap pour optimisation du ramasse miette
 			// Note: si un événement est ajouté avec un nom déjà utilisé sur un DomElement commun, ceux-ci seront fusionné et donc activé/désactivé/supprimé en même temps
 			
 				Event.setEventByName = function(elemList, eventName) {
@@ -365,25 +366,25 @@
 							elem = extractElem(elemList, "addEventListener");
 					
 					for(let i = elem.length; i--;) {
-						const 	actElem = elem[i];
-						let		index = eventNameElem.indexOf(actElem);
-								
-						if(index == -1) {
-							index = eventNameElem.length;
+						const actElem = elem[i];
+						
+						let actElemObjt;
+						if(!eventNameFct.has(actElem)) {
+							actElemObjt = {};
 							
-							eventNameElem[index] = actElem;
+							eventNameFct.set(actElem, actElemObjt);
+						}
+						else {
+							actElemObjt = eventNameFct.get(actElem);
 						}
 						
-						if(!eventNameFct[index]) {
-							eventNameFct[index] = {};
-						}
-						
-						const elemFctName = eventNameFct[index][eventName] = eventNameFct[index][eventName] || {};
+						const elemFctName = actElemObjt[eventName] = actElemObjt[eventName] || {};
 						for(let z in event) {
 							if(event.hasOwnProperty(z)) {
-								const actEvent = event[z];
+								const 	actEvent = event[z],
+										save = [[actEvent, option]];
 								
-								elemFctName[z] = elemFctName[z] ? elemFctName[z].concat(actEvent) : actEvent;
+								elemFctName[z] = elemFctName[z] ? elemFctName[z].concat(save) : save;
 								
 								if(simulateEvent[z]) {
 									simulateEvent[z].deploy([actElem], actEvent, option);
@@ -411,21 +412,28 @@
 		 * @version: 1.0
 		 * @dependencies: [{ "name" : "setEventByName", "version" : ">= 1.0" }]
 		*/
-		
-			Event.getEventByName = function(elemList, eventName, disable) {
+			
+			Event.getEventByName = function(elemList, assocName = false, eventName = false, disable = false) {
 				const eventList = [];
 				
-				B:for(let i = 0, length = elemList.length; i < length; i++) {
-					const index = eventNameElem.indexOf(elemList[i]);
+				for(let i = 0, length = elemList.length; i < length; i++) {
+					const target = (disable ? eventNameDis : eventNameFct).get(elemList[i]);
 					
-					if(index != -1) {
-						const temp = (disable ? eventNameDis : eventNameFct)[index];
+					if(target) {
+						let value = assocName ? target[assocName] : target;
 						
-						if(temp) {
-							eventList[i] = temp[eventName];
+						if(value) {
+							if(eventName) {
+								value = value[eventName] || false;
+							}
 							
-							continue B;
+							eventList[i] = value;
 						}
+						else {
+							eventList[i] = false;
+						}
+						
+						continue;
 					}
 					
 					eventList[i] = false;
@@ -454,17 +462,18 @@
 			// 		simulateMethod: {String}, nom de la méthode à utiliser pour les événements simulés
 			// 		eventMethod: {String}, nom de la méthode à utiliser pour les événements classiques
 			// @return: {Function}, une fonction ajoutant/supprimant des fonctions des tableaux des fonctions sauvegardés par nom
-			// Version: 1.0
+			// Version: 1.1
+			// Version 1.0 => 1.1: Prise en charge de WeakMap pour optimisation du ramasse miette meilleur nettoyage des Maps lors de la suppression
 			
 				const initEventByNameMod = function(sourceSet, sourceDelete, move, simulateMethod, eventMethod) {
 					return function(elem, eventName) {
-						for(let i = elem.length; i--;) {
+						for(let i = 0, elemLength = elem.length; i < elemLength; i++) {
 							if(elem[i][eventMethod]) {
-								const 	actElem = elem[i];
-								let		index = eventNameElem.indexOf(actElem);
+								const 	actElem = elem[i],
+										targetObjt = sourceDelete.get(actElem);
 								
-								if(index != -1 && sourceDelete[index]) {
-									const target = sourceDelete[index][eventName];
+								if(targetObjt) {
+									const target = targetObjt[eventName];
 									
 									if(target) {
 										if(arguments.length == 2) {
@@ -476,7 +485,7 @@
 												y = 2;
 										}
 										
-										for(let y = arg.length; y--;) {
+										for(let argLength = arg.length; y < argLength; y++) {
 											const actEventName = arg[y];
 											
 											if(target[actEventName]) {
@@ -487,20 +496,28 @@
 												}
 												else {
 													for(let z = 0, eventLength = eventList.length; z < eventLength; z++) {
-														actElem[eventMethod](actEventName, eventList[z]);
+														const 	eventFct = eventList[z][0],
+																eventOpt = eventList[z][1];
+														
+														for(let x = 0, eventActLength = eventFct.length; x < eventActLength; x++) {
+															actElem[eventMethod](actEventName, eventFct[x], eventOpt);
+														}
 													}
 												}
 												
 												if(move) {
-													if(!sourceSet[index]) {
-														sourceSet[index] = {};
+													let sourceSetObjt = sourceSet.get(actElem);
+													if(!sourceSetObjt) {
+														sourceSetObjt = {};
+														
+														sourceSet.set(actElem, sourceSetObjt);
 													}
 													
-													if(!sourceSet[index][eventName]) {
-														sourceSet[index][eventName] = {};
+													if(!sourceSetObjt[eventName]) {
+														sourceSetObjt[eventName] = {};
 													}
 													
-													sourceSet[index][eventName][actEventName] = sourceSet[index][eventName][actEventName] ? sourceSet[index][eventName][actEventName].concat(eventList) : target[actEventName];
+													sourceSetObjt[eventName][actEventName] = sourceSetObjt[eventName][actEventName] ? sourceSetObjt[eventName][actEventName].concat(eventList) : target[actEventName];
 												}
 												
 												delete target[actEventName];
@@ -508,17 +525,40 @@
 										}
 										
 										if(!Object.keys(target).length) {
-											delete sourceDelete[index][eventName];
+											delete targetObjt[eventName];
 										}
 										
-										if(!Object.keys(sourceDelete[index]).length) {
-											if(move) {
-												delete sourceDelete[index];
+										if(!Object.keys(targetObjt).length) {
+											sourceDelete.delete(actElem);
+										}
+									}
+								}
+									
+								if(!move) {	// Cleaning Dis map on deletion (move = false only when removeEventByName is called)
+									const targetObjt = eventNameDis.get(actElem);
+									
+									if(targetObjt) {
+										const target = targetObjt[eventName];
+										
+										if(target) {
+											if(arguments.length == 2) {
+												var arg = Object.keys(target),
+													y = 0;
 											}
 											else {
-												delete eventNameFct[index];
-												delete eventNameElem[index];
-												delete eventNameDis[index];
+												var arg = arguments,
+													y = 2;
+											}
+										
+											for(let argLength = arg.length; y < argLength; y++) {
+												delete target[arg[y]];
+											}
+											if(!Object.keys(target).length) {
+												delete targetObjt[eventName];
+											}
+											
+											if(!Object.keys(targetObjt).length) {
+												eventNameDis.delete(actElem);
 											}
 										}
 									}
@@ -612,25 +652,28 @@
 			// 		eventName: {String|Boolean}, indique le nom de l'événement à simuler. Si non spécifié, tous les événements enregistré au nom @param[1] seront éxécuté
 			// 		...arg: {All}, les arguments suivants sont ceux qu'il faut donner en arguments des fonctions des événements simulés
 			// @return: {Array}, le tableau @param[0]
-			// Version: 1.1
+			// Version: 1.2
 			// Version 1.1 => 1.1: Refonte de la fonction lors de la création de Event.js
+			// Version 1.1 => 1.2: Prise en charge de WeakMap pour optimisation du ramasse miette
 			
 				Event.callEventByName = function(elem, eventName, subName, ...fctArg) {
 					for(let i = elem.length; i--;) {
 						const 	actElem = elem[i];
-						let		index = eventNameElem.indexOf(actElem);
+						const	targetObjt = eventNameFct.get(actElem);
 						
-						if(index != -1 && eventNameFct[index]) {
-							const 	target = eventNameFct[index][eventName],
+						if(targetObjt) {
+							const 	target = targetObjt[eventName],
 									arg = arguments.length == 2 ? Object.keys(target) : [subName];
 							
-							for(let y = arg.length; y--;) {
-								const 	actSubName = arg[y],
+							for(let y = 0, argLength = arg.length; y < argLength; y++) {
+								const 	actSubName = arg[y].toLowerCase(),
 										eventList = target[actSubName];
 								
 								if(eventList) {
-									for(let z = eventList.length; z--;) {
-										eventList[z].apply(actElem, fctArg);
+									for(let z = 0, eventListLength = eventList.length; z < eventListLength; z++) {
+										for(let x = 0, eventListAct = eventList[z], eventListActLength = eventListAct.length; z < eventListActLength; z++) {
+											eventListAct[x][0].apply(actElem, fctArg);
+										}
 									}
 								}
 							}
@@ -1039,6 +1082,22 @@
 									
 									for(let i = 0, length = target.length; i < length; i++) {
 										target[i].apply(this, finalArg);
+									}
+								}
+								
+								return this;
+							}
+						},
+						dispatchEventAsync : {
+							value : async function(name, ...arg) {
+								name = name.replace(/^on/, "").toLowerCase();
+								
+								if(event[name]) {
+									const 	target = [].concat(event[name]),	// Prevent event list changes in event functions
+											finalArg = prepare[name] ? prepare[name].apply(this, arg) : arg;
+									
+									for(let i = 0, length = target.length; i < length; i++) {
+										await target[i].apply(this, finalArg);
 									}
 								}
 								
